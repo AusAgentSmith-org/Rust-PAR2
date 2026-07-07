@@ -361,11 +361,19 @@ fn build_block_map(file_set: &Par2FileSet) -> BlockMap {
     let mut files = Vec::new();
     let mut block_offset = 0u32;
 
-    // Sort files by file ID for deterministic ordering (same as par2cmdline)
-    let mut sorted_files: Vec<_> = file_set.files.values().collect();
-    sorted_files.sort_by_key(|f| f.file_id);
+    let ordered_files: Vec<_> = if file_set.file_order.is_empty() {
+        let mut fallback: Vec<_> = file_set.files.values().collect();
+        fallback.sort_by_key(|f| f.file_id);
+        fallback
+    } else {
+        file_set
+            .file_order
+            .iter()
+            .filter_map(|id| file_set.files.get(id))
+            .collect()
+    };
 
-    for f in sorted_files {
+    for f in ordered_files {
         let block_count = if slice_size == 0 {
             0
         } else {
@@ -479,6 +487,134 @@ fn read_source_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    use crc32fast::hash as crc32_hash;
+    use md5::{Digest, Md5};
+
+    use crate::packets::{HEADER_SIZE, MAGIC};
+
+    const TYPE_MAIN: &[u8; 16] = b"PAR 2.0\x00Main\x00\x00\x00\x00";
+    const TYPE_FILE_DESC: &[u8; 16] = b"PAR 2.0\x00FileDesc";
+    const TYPE_IFSC: &[u8; 16] = b"PAR 2.0\x00IFSC\x00\x00\x00\x00";
+    const TYPE_RECOVERY: &[u8; 16] = b"PAR 2.0\x00RecvSlic";
+
+    fn build_packet(set_id: [u8; 16], packet_type: &[u8; 16], body: &[u8]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(32 + body.len());
+        data.extend_from_slice(&set_id);
+        data.extend_from_slice(packet_type);
+        data.extend_from_slice(body);
+
+        let mut packet = Vec::with_capacity(32 + data.len());
+        packet.extend_from_slice(MAGIC);
+        packet.extend_from_slice(&((HEADER_SIZE + body.len()) as u64).to_le_bytes());
+        packet.extend_from_slice(&Md5::digest(&data));
+        packet.extend_from_slice(&data);
+        packet
+    }
+
+    fn file_md5(data: &[u8]) -> [u8; 16] {
+        Md5::digest(data).into()
+    }
+
+    fn hash_16k(data: &[u8]) -> [u8; 16] {
+        Md5::digest(&data[..data.len().min(16_384)]).into()
+    }
+
+    fn padded_block(data: &[u8], block_index: usize, slice_size: usize) -> Vec<u8> {
+        let start = block_index * slice_size;
+        let end = (start + slice_size).min(data.len());
+        let mut block = vec![0u8; slice_size];
+        if start < data.len() {
+            block[..end - start].copy_from_slice(&data[start..end]);
+        }
+        block
+    }
+
+    fn write_par2_fixture(
+        dir: &Path,
+        slice_size: usize,
+        files: &[(&str, [u8; 16], Vec<u8>)],
+        main_order: &[[u8; 16]],
+        recovery_exponents: &[u32],
+    ) -> PathBuf {
+        let set_id = [0x5Au8; 16];
+        let mut index_bytes = Vec::new();
+
+        let mut main_body = Vec::new();
+        main_body.extend_from_slice(&(slice_size as u64).to_le_bytes());
+        main_body.extend_from_slice(&(main_order.len() as u32).to_le_bytes());
+        for file_id in main_order {
+            main_body.extend_from_slice(file_id);
+        }
+        index_bytes.extend_from_slice(&build_packet(set_id, TYPE_MAIN, &main_body));
+
+        for (filename, file_id, data) in files {
+            std::fs::write(dir.join(filename), data).unwrap();
+
+            let mut desc_body = Vec::new();
+            desc_body.extend_from_slice(file_id);
+            desc_body.extend_from_slice(&file_md5(data));
+            desc_body.extend_from_slice(&hash_16k(data));
+            desc_body.extend_from_slice(&(data.len() as u64).to_le_bytes());
+            desc_body.extend_from_slice(filename.as_bytes());
+            desc_body.push(0);
+            while desc_body.len() % 4 != 0 {
+                desc_body.push(0);
+            }
+            index_bytes.extend_from_slice(&build_packet(set_id, TYPE_FILE_DESC, &desc_body));
+
+            let block_count = data.len().div_ceil(slice_size);
+            let mut ifsc_body = Vec::new();
+            ifsc_body.extend_from_slice(file_id);
+            for block_idx in 0..block_count {
+                let block = padded_block(data, block_idx, slice_size);
+                ifsc_body.extend_from_slice(&file_md5(&block));
+                ifsc_body.extend_from_slice(&crc32_hash(&block).to_le_bytes());
+            }
+            index_bytes.extend_from_slice(&build_packet(set_id, TYPE_IFSC, &ifsc_body));
+        }
+
+        std::fs::write(dir.join("fixture.par2"), &index_bytes).unwrap();
+
+        let ordered_files: Vec<_> = main_order
+            .iter()
+            .map(|wanted| {
+                files
+                    .iter()
+                    .find(|(_, file_id, _)| file_id == wanted)
+                    .unwrap()
+            })
+            .collect();
+        let input_blocks: Vec<Vec<u8>> = ordered_files
+            .iter()
+            .flat_map(|(_, _, data)| {
+                let count = data.len().div_ceil(slice_size);
+                (0..count).map(move |block_idx| padded_block(data, block_idx, slice_size))
+            })
+            .collect();
+
+        let input_count = input_blocks.len();
+        let enc = GfMatrix::par2_encoding_matrix(input_count, recovery_exponents);
+        let srcs: Vec<&[u8]> = input_blocks.iter().map(Vec::as_slice).collect();
+        let mut vol_bytes = index_bytes.clone();
+
+        for (row_idx, &exp) in recovery_exponents.iter().enumerate() {
+            let coeffs: Vec<u16> = (0..input_count)
+                .map(|col| enc.get(input_count + row_idx, col))
+                .collect();
+            let mut recovery = vec![0u8; slice_size];
+            gf_simd::mul_add_multi(&mut recovery, &srcs, &coeffs);
+
+            let mut body = Vec::with_capacity(4 + slice_size);
+            body.extend_from_slice(&exp.to_le_bytes());
+            body.extend_from_slice(&recovery);
+            vol_bytes.extend_from_slice(&build_packet(set_id, TYPE_RECOVERY, &body));
+        }
+
+        std::fs::write(dir.join("fixture.vol00+2.par2"), &vol_bytes).unwrap();
+        dir.join("fixture.par2")
+    }
 
     /// Test that the basic RS encode→decode round-trip works with the D×D approach.
     /// 2 data blocks, 2 recovery blocks, lose both data blocks, recover.
@@ -632,5 +768,63 @@ mod tests {
         // Verify recovery
         assert_eq!(outputs[0], inputs[1], "Recovered block 1 should match");
         assert_eq!(outputs[1], inputs[3], "Recovered block 3 should match");
+    }
+
+    #[test]
+    fn test_repair_cross_file_damage_respects_main_packet_file_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let slice_size = 4096usize;
+        let file_a_id = [0x20; 16];
+        let file_b_id = [0x10; 16];
+        let file_a = vec![0x41; slice_size * 2];
+        let file_b = vec![0x42; slice_size * 2];
+
+        let par2_path = write_par2_fixture(
+            dir.path(),
+            slice_size,
+            &[
+                ("file_a.bin", file_a_id, file_a.clone()),
+                ("file_b.bin", file_b_id, file_b.clone()),
+            ],
+            &[file_a_id, file_b_id],
+            &[0, 1],
+        );
+
+        let file_set = crate::parse(&par2_path).unwrap();
+        assert_eq!(file_set.file_order, vec![file_a_id, file_b_id]);
+
+        {
+            let file_a_path = dir.path().join("file_a.bin");
+            let file_b_path = dir.path().join("file_b.bin");
+            let mut a = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&file_a_path)
+                .unwrap();
+            let mut b = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&file_b_path)
+                .unwrap();
+            a.seek(SeekFrom::Start(slice_size as u64)).unwrap();
+            b.seek(SeekFrom::Start(slice_size as u64)).unwrap();
+            a.write_all(&vec![0xDE; slice_size]).unwrap();
+            b.write_all(&vec![0xAD; slice_size]).unwrap();
+        }
+
+        let pre = verify::verify(&file_set, dir.path());
+        assert_eq!(pre.damaged.len(), 2);
+        assert_eq!(pre.blocks_needed(), 2);
+        assert!(pre.repair_possible);
+
+        let repaired = repair(&file_set, dir.path()).unwrap();
+        assert!(repaired.success);
+
+        assert_eq!(
+            std::fs::read(dir.path().join("file_a.bin")).unwrap(),
+            file_a
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("file_b.bin")).unwrap(),
+            file_b
+        );
     }
 }
