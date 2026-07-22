@@ -523,8 +523,7 @@ mod tests {
     /// Test that parsing a non-PAR2 file returns an error.
     #[test]
     fn test_parse_non_par2() {
-        let path =
-            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
+        let path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;
@@ -537,8 +536,7 @@ mod tests {
     /// Test parsing a recovery volume (should count recovery blocks).
     #[test]
     fn test_parse_recovery_volume() {
-        let path =
-            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.vol0+1.par2");
+        let path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.vol0+1.par2");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;

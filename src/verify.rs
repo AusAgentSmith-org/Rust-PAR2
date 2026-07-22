@@ -318,8 +318,7 @@ mod tests {
     /// Test verification of the intact par2test set.
     #[test]
     fn test_verify_intact_set() {
-        let par2_path =
-            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
+        let par2_path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
         let dir = Path::new("tests/fixtures/sabnzbd/par2repair/basic");
 
         if !par2_path.exists() {
@@ -381,8 +380,7 @@ mod tests {
     /// Test compute_hash_16k.
     #[test]
     fn test_hash_16k() {
-        let path =
-            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
+        let path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
         if !path.exists() {
             eprintln!("Skipping test: test data not found");
             return;
@@ -396,8 +394,7 @@ mod tests {
     /// Test that hash_16k matches the PAR2 stored hash for an intact file.
     #[test]
     fn test_hash_16k_matches_par2() {
-        let par2_path =
-            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
+        let par2_path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
         let dir = Path::new("tests/fixtures/sabnzbd/par2repair/basic");
 
         if !par2_path.exists() {
