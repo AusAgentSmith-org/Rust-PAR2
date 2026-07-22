@@ -452,7 +452,7 @@ mod tests {
     /// Test parsing the real PAR2 file from SABnzbd test data.
     #[test]
     fn test_parse_par2test() {
-        let path = Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.par2");
+        let path = Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;
@@ -509,7 +509,7 @@ mod tests {
     /// Test parsing the basic_16k par2 file.
     #[test]
     fn test_parse_basic_16k() {
-        let path = Path::new("/home/sprooty/sabnzbd/tests/data/par2file/basic_16k.par2");
+        let path = Path::new("tests/fixtures/sabnzbd/par2file/basic_16k.par2");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn test_parse_non_par2() {
         let path =
-            Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.part2.rar");
+            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn test_parse_recovery_volume() {
         let path =
-            Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.vol0+1.par2");
+            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.vol0+1.par2");
         if !path.exists() {
             eprintln!("Skipping test: {path:?} not found");
             return;

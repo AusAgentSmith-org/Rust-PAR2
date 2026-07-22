@@ -319,8 +319,8 @@ mod tests {
     #[test]
     fn test_verify_intact_set() {
         let par2_path =
-            Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.par2");
-        let dir = Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic");
+            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
+        let dir = Path::new("tests/fixtures/sabnzbd/par2repair/basic");
 
         if !par2_path.exists() {
             eprintln!("Skipping test: test data not found");
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn test_hash_16k() {
         let path =
-            Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.part2.rar");
+            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.part2.rar");
         if !path.exists() {
             eprintln!("Skipping test: test data not found");
             return;
@@ -397,8 +397,8 @@ mod tests {
     #[test]
     fn test_hash_16k_matches_par2() {
         let par2_path =
-            Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic/par2test.par2");
-        let dir = Path::new("/home/sprooty/sabnzbd/tests/data/par2repair/basic");
+            Path::new("tests/fixtures/sabnzbd/par2repair/basic/par2test.par2");
+        let dir = Path::new("tests/fixtures/sabnzbd/par2repair/basic");
 
         if !par2_path.exists() {
             eprintln!("Skipping test: test data not found");
