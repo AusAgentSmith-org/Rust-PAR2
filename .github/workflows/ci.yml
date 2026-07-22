@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: [self-hosted, node-b, linux, x64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Configure retained Forgejo registry credentials
+        env:
+          FORGEJO_CARGO_TOKEN: ${{ secrets.FORGEJO_CARGO_TOKEN }}
+        shell: bash
+        run: |
+          test -n "$FORGEJO_CARGO_TOKEN"
+          export CARGO_HOME="$RUNNER_TEMP/cargo-home"
+          mkdir -p "$CARGO_HOME"
+          chmod 700 "$CARGO_HOME"
+          printf '[registries.forgejo]\nindex = "sparse+https://repo.indexarr.net/api/packages/indexarr/cargo/"\ncredential-provider = "cargo:token"\n' > "$CARGO_HOME/config.toml"
+          printf '[registries.forgejo]\ntoken = "Bearer %s"\n' "$FORGEJO_CARGO_TOKEN" > "$CARGO_HOME/credentials.toml"
+          chmod 600 "$CARGO_HOME/credentials.toml"
+          printf 'CARGO_HOME=%s\n' "$CARGO_HOME" >> "$GITHUB_ENV"
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace --locked
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
