@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   policy:
+    # Dependabot metadata PRs do not consume the self-hosted policy runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.type != 'Bot'
     runs-on: [self-hosted, node-b, linux, x64]
     steps:
       - uses: actions/checkout@v7
