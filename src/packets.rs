@@ -56,6 +56,7 @@ struct ParseState {
     recovery_set_id: Option<Id16>,
     slice_size: Option<u64>,
     nr_files: Option<u32>,
+    file_order: Vec<Id16>,
     /// FileDesc data keyed by File ID.
     file_descs: HashMap<Id16, FileDescData>,
     /// IFSC (slice checksum) data keyed by File ID.
@@ -95,6 +96,7 @@ pub fn parse_par2_reader<R: Read + Seek>(
         recovery_set_id: None,
         slice_size: None,
         nr_files: None,
+        file_order: Vec::new(),
         file_descs: HashMap::new(),
         ifsc_data: HashMap::new(),
         recovery_count: 0,
@@ -207,24 +209,6 @@ pub fn parse_par2_reader<R: Read + Seek>(
         }
 
         packets_parsed += 1;
-
-        // Early exit optimisation: once we have all file descs and IFSCs, we
-        // can stop (avoids reading huge recovery volumes in concatenated files).
-        if let Some(nr) = state.nr_files {
-            if state.file_descs.len() == nr as usize
-                && state.ifsc_data.len() == nr as usize
-                && state.slice_size.is_some()
-            {
-                // If the file is large, stop early like SABnzbd does.
-                if file_size > 10 * 1024 * 1024 {
-                    debug!(
-                        packets_parsed,
-                        "parsed all file metadata, stopping early on large file"
-                    );
-                    break;
-                }
-            }
-        }
     }
 
     if packets_parsed == 0 {
@@ -262,6 +246,7 @@ pub fn parse_par2_reader<R: Read + Seek>(
     Ok(Par2FileSet {
         recovery_set_id,
         slice_size,
+        file_order: state.file_order,
         files,
         recovery_block_count: state.recovery_count,
         creator: state.creator,
@@ -391,11 +376,26 @@ fn parse_main(data: &[u8], state: &mut ParseState) {
 
     let slice_size = u64::from_le_bytes(data[32..40].try_into().unwrap());
     let nr_files = u32::from_le_bytes(data[40..44].try_into().unwrap());
+    let ids = &data[44..];
+    let count = (nr_files as usize).min(ids.len() / 16);
+    let mut file_order = Vec::with_capacity(count);
+    for i in 0..count {
+        let start = i * 16;
+        let mut id = [0u8; 16];
+        id.copy_from_slice(&ids[start..start + 16]);
+        file_order.push(id);
+    }
 
-    trace!(slice_size, nr_files, "parsed Main");
+    trace!(
+        slice_size,
+        nr_files,
+        main_file_ids = file_order.len(),
+        "parsed Main"
+    );
 
     state.slice_size = Some(slice_size);
     state.nr_files = Some(nr_files);
+    state.file_order = file_order;
 }
 
 /// Parse a Creator packet.
@@ -448,6 +448,21 @@ fn scan_for_magic<R: Read + Seek>(reader: &mut R, file_size: u64) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    fn build_packet(set_id: Id16, packet_type: &[u8; 16], body: &[u8]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(32 + body.len());
+        data.extend_from_slice(&set_id);
+        data.extend_from_slice(packet_type);
+        data.extend_from_slice(body);
+
+        let mut packet = Vec::with_capacity(32 + data.len());
+        packet.extend_from_slice(PAR2_MAGIC);
+        packet.extend_from_slice(&((HEADER_SIZE + body.len()) as u64).to_le_bytes());
+        packet.extend_from_slice(&Md5::digest(&data));
+        packet.extend_from_slice(&data);
+        packet
+    }
 
     /// Test parsing the real PAR2 file from SABnzbd test data.
     #[test]
@@ -547,5 +562,76 @@ mod tests {
             set.recovery_block_count >= 1,
             "recovery volume should have at least 1 recovery block"
         );
+    }
+
+    #[test]
+    fn test_parse_main_preserves_file_order() {
+        let set_id = [0xAB; 16];
+        let file_a = [0x10; 16];
+        let file_b = [0x01; 16];
+
+        let mut main_body = Vec::new();
+        main_body.extend_from_slice(&4096u64.to_le_bytes());
+        main_body.extend_from_slice(&2u32.to_le_bytes());
+        main_body.extend_from_slice(&file_a);
+        main_body.extend_from_slice(&file_b);
+
+        let packet = build_packet(set_id, TYPE_MAIN, &main_body);
+
+        let mut state = ParseState {
+            recovery_set_id: None,
+            slice_size: None,
+            nr_files: None,
+            file_order: Vec::new(),
+            file_descs: HashMap::new(),
+            ifsc_data: HashMap::new(),
+            recovery_count: 0,
+            creator: None,
+        };
+        parse_main(&packet[32..], &mut state);
+        assert_eq!(state.file_order, vec![file_a, file_b]);
+    }
+
+    #[test]
+    fn test_large_recovery_volume_counts_all_blocks() {
+        let set_id = [0x42; 16];
+        let file_id = [0x24; 16];
+        let mut bytes = Vec::new();
+
+        let mut main_body = Vec::new();
+        main_body.extend_from_slice(&524_288u64.to_le_bytes());
+        main_body.extend_from_slice(&1u32.to_le_bytes());
+        main_body.extend_from_slice(&file_id);
+        bytes.extend_from_slice(&build_packet(set_id, TYPE_MAIN, &main_body));
+
+        let mut file_desc_body = Vec::new();
+        file_desc_body.extend_from_slice(&file_id);
+        file_desc_body.extend_from_slice(&[0x11; 16]);
+        file_desc_body.extend_from_slice(&[0x22; 16]);
+        file_desc_body.extend_from_slice(&524_288u64.to_le_bytes());
+        file_desc_body.extend_from_slice(b"payload.bin\0");
+        while file_desc_body.len() % 4 != 0 {
+            file_desc_body.push(0);
+        }
+        bytes.extend_from_slice(&build_packet(set_id, TYPE_FILE_DESC, &file_desc_body));
+
+        let mut ifsc_body = Vec::new();
+        ifsc_body.extend_from_slice(&file_id);
+        ifsc_body.extend_from_slice(&[0x33; 16]);
+        ifsc_body.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&build_packet(set_id, TYPE_IFSC, &ifsc_body));
+
+        for exp in 0..20u32 {
+            let mut rec_body = Vec::with_capacity(4 + 524_288);
+            rec_body.extend_from_slice(&exp.to_le_bytes());
+            rec_body.extend(std::iter::repeat_n(exp as u8, 524_288));
+            bytes.extend_from_slice(&build_packet(set_id, TYPE_RECOVERY, &rec_body));
+        }
+
+        let mut cursor = Cursor::new(bytes);
+        let file_size = cursor.get_ref().len() as u64;
+        let parsed = parse_par2_reader(&mut cursor, file_size).unwrap();
+        assert_eq!(parsed.recovery_block_count, 20);
+        assert_eq!(parsed.file_order, vec![file_id]);
     }
 }

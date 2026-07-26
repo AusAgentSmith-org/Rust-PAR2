@@ -16,6 +16,10 @@ pub struct Par2FileSet {
     pub recovery_set_id: Id16,
     /// Slice (block) size in bytes.
     pub slice_size: u64,
+    /// Source file order from the Main packet. PAR2 recovery math depends on
+    /// this logical input ordering, which is not guaranteed to match a sort by
+    /// file ID or filename.
+    pub file_order: Vec<Id16>,
     /// Files described in this PAR2 set, keyed by File ID.
     pub files: HashMap<Id16, Par2File>,
     /// Number of recovery slices available (counted from RecoverySlice packets).
