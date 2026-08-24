@@ -19,8 +19,17 @@ if [[ -n "$workflow_matches" ]]; then
   fail 'workflow selects a hosted or unresolved dynamic runner'
 fi
 if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF" >/dev/null 2>&1 || true
-  commits="$(git rev-list --reverse "origin/$GITHUB_BASE_REF..HEAD" 2>/dev/null || git rev-list --reverse HEAD~1..HEAD 2>/dev/null || git rev-list --reverse HEAD)"
+  # Fetch the base ref with full history (not --depth=1): a shallow base ref
+  # grafts away its ancestry, so `origin/BASE..HEAD` can no longer tell that
+  # the base tip's ancestors are shared with HEAD. On a branch that has merged
+  # the base in (e.g. after "Update branch"), that made historical base commits
+  # reappear in the range as false positives.
+  git fetch --no-tags origin "$GITHUB_BASE_REF" >/dev/null 2>&1 || true
+  # Scope to commits this PR actually introduces: everything since the branch
+  # diverged from the base (merge-base), which excludes commits merged in from
+  # the base itself.
+  base="$(git merge-base "origin/$GITHUB_BASE_REF" HEAD 2>/dev/null || true)"
+  commits="$(git rev-list --reverse "${base:+$base..}HEAD" 2>/dev/null || git rev-list --reverse HEAD~1..HEAD 2>/dev/null || git rev-list --reverse HEAD)"
 elif [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_BEFORE:-}" != 0000000000000000000000000000000000000000 ]]; then
   commits="$(git rev-list --reverse "${GITHUB_BEFORE:-}..HEAD" 2>/dev/null || git rev-list --reverse HEAD~1..HEAD 2>/dev/null || git rev-list --reverse HEAD)"
 else
